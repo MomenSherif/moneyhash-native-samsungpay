@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Samsung Pay — Web Checkout (MoneyHash)</title>
+
+    <!-- ------------------------------------------------------------------ -->
+    <!-- MoneyHash environment overrides.                                    -->
+    <!-- Must run BEFORE the MoneyHash SDK makes any request. The SDK reads  -->
+    <!-- these window globals lazily (per request), so setting them here is  -->
+    <!-- enough for the deferred module script below.                        -->
+    <!--                                                                     -->
+    <!-- Default is staging. Pass ?env=local to point the embed/vault input  -->
+    <!-- iframes at your local dev servers.                                  -->
+    <!-- ------------------------------------------------------------------ -->
+    <script>
+      (function () {
+        var env = new URLSearchParams(location.search).get('env');
+
+        // Staging (default)
+        window.MONEYHASH_IFRAME_URL = 'https://stg-embed.moneyhash.io';
+        window.API_URL = 'https://staging-web.moneyhash.io';
+        window.MONEYHASH_VAULT_INPUT_IFRAME_URL =
+          'https://vault-staging-form.moneyhash.io';
+        window.MONEYHASH_VAULT_API_URL = 'https://vault-staging.moneyhash.io';
+
+        if (env === 'local') {
+          window.MONEYHASH_IFRAME_URL = 'http://localhost:8080';
+          window.MONEYHASH_VAULT_INPUT_IFRAME_URL = 'http://localhost:5173';
+          window.MONEYHASH_VAULT_API_URL = 'http://localhost:8001';
+        }
+
+        // Expose the resolved env for logging in the module script.
+        window.__MH_ENV = env === 'local' ? 'local' : 'staging';
+      })();
+    </script>
+
+    <!-- Samsung Pay Web Checkout SDK -->
+    <script src="https://img.mpay.samsung.com/gsmpi/sdk/samsungpay_web_sdk.js"></script>
+
+    <style>
+      :root {
+        --bg: #0b0b0f;
+        --card: #16161d;
+        --line: #26262f;
+        --text: #f4f4f6;
+        --muted: #9a9aa8;
+        --accent: #1428a0; /* Samsung blue */
+        --ok: #3fb950;
+        --err: #f85149;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+          Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        justify-content: center;
+        padding: 40px 16px;
+      }
+      .shell {
+        width: 100%;
+        max-width: 440px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 0 0 24px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+      }
+      .row:last-child {
+        border-bottom: none;
+      }
+      .row .name {
+        color: var(--muted);
+      }
+      .total {
+        font-weight: 700;
+        font-size: 18px;
+      }
+
+      #samsungpay-container {
+        margin-top: 8px;
+      }
+      /* Fallback styling in case the SDK button styles are scoped */
+      #samsungpay-container > * {
+        width: 100% !important;
+      }
+
+      .fallback-btn {
+        display: none;
+        width: 100%;
+        background: #000;
+        color: #fff;
+        border: none;
+        border-radius: 10px;
+        padding: 14px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .fallback-btn:hover {
+        opacity: 0.9;
+      }
+
+      .status {
+        font-size: 12.5px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.err {
+        background: var(--err);
+      }
+
+      .log {
+        background: #0d0d12;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        color: #c9d1d9;
+      }
+      .log .t {
+        color: #6e7681;
+      }
+      .log .ok {
+        color: var(--ok);
+      }
+      .log .err {
+        color: var(--err);
+      }
+      .section-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--muted);
+        margin: 0 0 10px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="shell">
+      <h1>Samsung Pay</h1>
+      <p class="sub">Web Checkout SDK demo</p>
+
+      <!-- Order summary -->
+      <div class="card">
+        <div class="row total">
+          <span>Total</span><span id="order-total">$300.00</span>
+        </div>
+      </div>
+
+      <!-- Payment -->
+      <div class="card">
+        <div class="status">
+          <span id="status-dot" class="dot"></span>
+          <span id="status-text">Initializing Samsung Pay…</span>
+        </div>
+        <div id="samsungpay-container"></div>
+        <button id="fallback-btn" class="fallback-btn">
+          Pay with Samsung Pay
+        </button>
+      </div>
+
+      <!-- Event log -->
+      <div class="card">
+        <p class="section-title">Event log</p>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import MoneyHash from '@moneyhash/js-sdk/headless';
+
+      // ---------------------------------------------------------------------
+      // Configuration
+      // ---------------------------------------------------------------------
+      // Public API key. Defaults to the staging demo key, override with
+      // ?publicApiKey=<key> (handy for local env).
+      const DEFAULT_PUBLIC_API_KEY =
+        'public.nFsXq2BS.rwzwRJAZaq8jEEPZcnMldOSFXIqklPOe9QXaOwW1';
+      const PUBLIC_API_KEY =
+        new URLSearchParams(location.search).get('publicApiKey') ||
+        DEFAULT_PUBLIC_API_KEY;
+
+      // Samsung Pay web-checkout environment:
+      //   "STAGE"             – Testing with a real device
+      //   "STAGE_WITHOUT_APK" – Testing without a device (simulated)
+      //   "PRODUCTION"        – Live environment
+      // Defaults to STAGE_WITHOUT_APK, override with ?samsungPayEnv=<value>.
+      const DEFAULT_SAMSUNG_PAY_ENV = 'STAGE_WITHOUT_APK';
+      const SAMSUNG_PAY_ENV =
+        new URLSearchParams(location.search).get('samsungPayEnv') ||
+        DEFAULT_SAMSUNG_PAY_ENV;
+
+      // MoneyHash slug for the Samsung Pay native method.
+      const SAMSUNG_PAY_SLUG = 'SAMSUNG_PAY';
+
+      // ---------------------------------------------------------------------
+      // Simulation
+      // The staging account does not offer Samsung Pay yet, so getMethods
+      // won't return it. When Samsung Pay is missing from the real response
+      // (or when ?simulate=1 is passed) we fall back to this mock method so
+      // the full native-pay flow can be exercised end to end.
+      // The `nativePayData` shape mirrors what MoneyHash returns for the
+      // SAMSUNG_PAY method (see docs.md).
+      // ---------------------------------------------------------------------
+      function makeSimulatedSamsungPayMethod() {
+        return {
+          id: SAMSUNG_PAY_SLUG,
+          title: 'Samsung Pay (simulated)',
+          icons: [],
+          isSelected: false,
+          confirmationRequired: false,
+          requiredBillingFields: null,
+          requiredShippingFields: null,
+          nativePayData: {
+            service_id: 'f39585070dec4c59a7f4dc',
+            allowed_brands: ['visa', 'mastercard', 'mada'],
+            merchant_name: 'MoneyHash Demo Merchant',
+            merchant_id: 'f39585070dec4c59a7f4dc',
+            country_code: 'AE',
+            currency: getMethodsOptions.currency,
+            amount: getMethodsOptions.amount,
+          },
+        };
+      }
+
+      // ---------------------------------------------------------------------
+      // Read amount / currency (and optional customer, flowId, intentId)
+      // from query params. getMethods is account level, so amount+currency
+      // are all we need to resolve the available methods.
+      // ---------------------------------------------------------------------
+      const params = new URLSearchParams(window.location.search);
+      const getMethodsOptions = {
+        currency: params.get('currency') || 'AED',
+        amount: params.get('amount') ? Number(params.get('amount')) : 300,
+      };
+      if (params.get('customer'))
+        getMethodsOptions.customer = params.get('customer');
+      if (params.get('flowId')) getMethodsOptions.flowId = params.get('flowId');
+      const intentId = params.get('intentId') || params.get('intent_id');
+      const forceSimulate = params.get('simulate') === '1';
+
+      // ---------------------------------------------------------------------
+      // UI helpers
+      // ---------------------------------------------------------------------
+      const logEl = document.getElementById('log');
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
+
+      function log(msg, kind) {
+        const time = new Date().toLocaleTimeString();
+        const cls = kind ? ` class="${kind}"` : '';
+        logEl.innerHTML += `<span class="t">[${time}]</span> <span${cls}>${msg}</span>\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setStatus(text, kind) {
+        statusText.textContent = text;
+        statusDot.className = 'dot' + (kind ? ' ' + kind : '');
+      }
+
+      function updateOrderTotal() {
+        const { amount, currency } = getMethodsOptions;
+        const el = document.getElementById('order-total');
+        if (el) el.textContent = `${amount} ${currency}`;
+      }
+
+      // ---------------------------------------------------------------------
+      // MoneyHash headless instance
+      // ---------------------------------------------------------------------
+      const moneyHash = new MoneyHash({
+        type: 'payment',
+        publicApiKey: PUBLIC_API_KEY,
+      });
+
+      // Samsung Pay pieces, populated from MoneyHash nativePayData.
+      let samsungPayClient;
+      let samsungPayMethodId;
+      let paymentMethods; // Samsung Pay `paymentMethods` object
+      let transactionDetail; // Samsung Pay `transactionDetail` object
+
+      // ---------------------------------------------------------------------
+      // Map MoneyHash nativePayData -> Samsung Pay SDK config
+      // ---------------------------------------------------------------------
+      function buildSamsungPayConfig(nativePayData) {
+        const d = nativePayData || {};
+
+        const methods = {
+          version: '2',
+          serviceId: d.service_id,
+          protocol: 'PROTOCOL_3DS',
+          allowedBrands: d.allowed_brands || [],
+          isCardholderNameRequired: true,
+        };
+
+        const detail = {
+          orderNumber: d.order_number || intentId || String(Date.now()),
+          merchant: {
+            name: d.merchant_name,
+            url: window.location.hostname,
+            id: d.merchant_id,
+            countryCode: d.country_code,
+          },
+          amount: {
+            option: 'FORMAT_TOTAL_ESTIMATED_AMOUNT',
+            currency: d.currency || getMethodsOptions.currency,
+            total: d.amount ?? getMethodsOptions.amount,
+          },
+        };
+
+        return { methods, detail };
+      }
+
+      // ---------------------------------------------------------------------
+      // Payment flow — Samsung Pay button click
+      // ---------------------------------------------------------------------
+      function onSamsungPayButtonClicked() {
+        log('Button clicked — opening Samsung Pay payment sheet…');
+        samsungPayClient
+          .loadPaymentSheet(paymentMethods, transactionDetail)
+          .then(async function (paymentCredential) {
+            console.log(typeof paymentCredential, paymentCredential);
+            log('Payment credential (receipt) received:', 'ok');
+            log(JSON.stringify(paymentCredential, null, 2), 'ok');
+
+            // Hand the receipt to MoneyHash. This requires an intent — pass
+            // ?intentId=<id> in the URL to exercise the full flow.
+            if (intentId) {
+              try {
+                // Control what gets sent as the receipt:
+                //   ?receipt=full – the full payment credential (stringified)
+                //   (default)     – just the 3DS data
+                const receiptMode =
+                  new URLSearchParams(location.search).get('receipt');
+                const nativeReceiptData = {
+                  receipt:
+                    receiptMode === 'full'
+                      ? JSON.stringify(paymentCredential)
+                      : paymentCredential['3DS'].data,
+                };
+                log('Submitting receipt to MoneyHash…');
+                const details = await moneyHash.submitPaymentReceipt({
+                  intentId,
+                  nativeReceiptData,
+                });
+                log(
+                  'MoneyHash receipt submitted. Intent state: ' + details.state,
+                  'ok',
+                );
+                log(JSON.stringify(details, null, 2), 'ok');
+              } catch (e) {
+                log('submitPaymentReceipt error: ' + JSON.stringify(e), 'err');
+              }
+            } else {
+              log(
+                'No intentId in query params — skipping submitPaymentReceipt. ' +
+                  'Add ?intentId=<id> to complete the payment.',
+              );
+            }
+
+            // Notify Samsung Pay so the sheet closes cleanly.
+            // `CHARGED` | `CANCELED` | `REJECTED` | `ERRED`
+            const paymentResult = { status: 'CHARGED' };
+            samsungPayClient.notify(paymentResult);
+            log('notify() sent: ' + JSON.stringify(paymentResult), 'ok');
+            setStatus('Payment complete ✓', 'ok');
+          })
+          .catch(function (error) {
+            log('Payment error: ' + JSON.stringify(error), 'err');
+            setStatus('Payment failed or cancelled', 'err');
+
+            // Report the failure to Samsung Pay so the sheet closes cleanly.
+            try {
+              samsungPayClient.notify({
+                status: 'FAILED',
+                provider: 'MoneyHash',
+              });
+            } catch (e) {
+              /* client may not be ready */
+            }
+          });
+      }
+
+      // ---------------------------------------------------------------------
+      // Samsung Pay SDK bootstrap using MoneyHash nativePayData
+      // ---------------------------------------------------------------------
+      function setupSamsungPay(nativePayData) {
+        if (typeof SamsungPay === 'undefined' || !SamsungPay.PaymentClient) {
+          log('Samsung Pay SDK failed to load.', 'err');
+          setStatus('Samsung Pay SDK unavailable', 'err');
+          return;
+        }
+
+        const { methods, detail } = buildSamsungPayConfig(nativePayData);
+        paymentMethods = methods;
+        transactionDetail = detail;
+
+        log('Samsung Pay config built from nativePayData:');
+        log(JSON.stringify({ paymentMethods, transactionDetail }, null, 2));
+
+        samsungPayClient = new SamsungPay.PaymentClient({
+          environment: SAMSUNG_PAY_ENV,
+        });
+        log('Samsung Pay PaymentClient created (env: ' + SAMSUNG_PAY_ENV + ')');
+
+        samsungPayClient
+          .isReadyToPay(paymentMethods)
+          .then(function (response) {
+            if (response && response.result) {
+              log('isReadyToPay: available', 'ok');
+              setStatus('Samsung Pay is ready', 'ok');
+              renderButton();
+            } else {
+              log('isReadyToPay: not available on this device/browser', 'err');
+              setStatus('Samsung Pay not available here', 'err');
+            }
+          })
+          .catch(function (err) {
+            log('isReadyToPay error: ' + JSON.stringify(err), 'err');
+            setStatus('Availability check failed', 'err');
+          });
+      }
+
+      function renderButton() {
+        try {
+          const btn = samsungPayClient.createButton({
+            onClick: onSamsungPayButtonClicked,
+            buttonStyle: 'white', // "black" | "white" | "white-outline"
+            type: 'buy', // "buy" | "checkout" | "pay" | "continue"
+          });
+          document.getElementById('samsungpay-container').appendChild(btn);
+          log('Samsung Pay button rendered.');
+        } catch (e) {
+          // If createButton is unavailable, fall back to a plain button.
+          log('createButton failed, using fallback button.', 'err');
+          const fb = document.getElementById('fallback-btn');
+          fb.style.display = 'block';
+          fb.addEventListener('click', onSamsungPayButtonClicked);
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // Bootstrap — resolve methods from MoneyHash, find Samsung Pay,
+      // log its nativePayData, then wire up the Samsung Pay SDK.
+      // ---------------------------------------------------------------------
+      async function init() {
+        updateOrderTotal();
+        log(
+          'MoneyHash env: ' +
+            (window.__MH_ENV || 'staging') +
+            ' | API_URL: ' +
+            window.API_URL +
+            ' | iframe: ' +
+            window.MONEYHASH_IFRAME_URL,
+        );
+        log('Using publicApiKey: ' + PUBLIC_API_KEY);
+        setStatus('Loading payment methods from MoneyHash…');
+        log('Calling getMethods with: ' + JSON.stringify(getMethodsOptions));
+
+        let methodsResponse = { paymentMethods: [], expressMethods: [] };
+        if (forceSimulate) {
+          log('?simulate=1 — skipping real getMethods, using mock data.');
+        } else {
+          try {
+            methodsResponse = await moneyHash.getMethods(getMethodsOptions);
+          } catch (e) {
+            log('getMethods error: ' + JSON.stringify(e), 'err');
+            setStatus('Failed to load payment methods', 'err');
+            return;
+          }
+        }
+
+        const { paymentMethods: pm = [], expressMethods = [] } =
+          methodsResponse;
+        log(
+          `getMethods returned ${pm.length} payment method(s), ` +
+            `${expressMethods.length} express method(s).`,
+        );
+
+        // Samsung Pay can arrive as an express method or a payment method.
+        let samsungPay = [...expressMethods, ...pm].find(
+          m => m.id === SAMSUNG_PAY_SLUG,
+        );
+
+        if (!samsungPay) {
+          log(
+            'Samsung Pay not offered by the account — falling back to ' +
+              'simulated nativePayData.',
+          );
+          samsungPay = makeSimulatedSamsungPayMethod();
+        }
+
+        samsungPayMethodId = samsungPay.id;
+        log('Samsung Pay method found: ' + samsungPay.title, 'ok');
+
+        // *** The native pay data — logged as requested. ***
+        log('Samsung Pay nativePayData:', 'ok');
+        log(JSON.stringify(samsungPay.nativePayData, null, 2), 'ok');
+        console.log('[Samsung Pay] nativePayData:', samsungPay.nativePayData);
+
+        setupSamsungPay(samsungPay.nativePayData);
+      }
+
+      window.addEventListener('load', init);
+    </script>
+  </body>
+</html>
