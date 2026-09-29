@@ -240,36 +240,6 @@
       const SAMSUNG_PAY_SLUG = 'SAMSUNG_PAY';
 
       // ---------------------------------------------------------------------
-      // Simulation
-      // The staging account does not offer Samsung Pay yet, so getMethods
-      // won't return it. When Samsung Pay is missing from the real response
-      // (or when ?simulate=1 is passed) we fall back to this mock method so
-      // the full native-pay flow can be exercised end to end.
-      // The `nativePayData` shape mirrors what MoneyHash returns for the
-      // SAMSUNG_PAY method (see docs.md).
-      // ---------------------------------------------------------------------
-      function makeSimulatedSamsungPayMethod() {
-        return {
-          id: SAMSUNG_PAY_SLUG,
-          title: 'Samsung Pay (simulated)',
-          icons: [],
-          isSelected: false,
-          confirmationRequired: false,
-          requiredBillingFields: null,
-          requiredShippingFields: null,
-          nativePayData: {
-            service_id: 'f39585070dec4c59a7f4dc',
-            allowed_brands: ['visa', 'mastercard', 'mada'],
-            merchant_name: 'MoneyHash Demo Merchant',
-            merchant_id: 'f39585070dec4c59a7f4dc',
-            country_code: 'AE',
-            currency: getMethodsOptions.currency,
-            amount: getMethodsOptions.amount,
-          },
-        };
-      }
-
-      // ---------------------------------------------------------------------
       // Read amount / currency (and optional customer, flowId, intentId)
       // from query params. getMethods is account level, so amount+currency
       // are all we need to resolve the available methods.
@@ -283,7 +253,6 @@
         getMethodsOptions.customer = params.get('customer');
       if (params.get('flowId')) getMethodsOptions.flowId = params.get('flowId');
       const intentId = params.get('intentId') || params.get('intent_id');
-      const forceSimulate = params.get('simulate') === '1';
 
       // ---------------------------------------------------------------------
       // UI helpers
@@ -503,16 +472,12 @@
         log('Calling getMethods with: ' + JSON.stringify(getMethodsOptions));
 
         let methodsResponse = { paymentMethods: [], expressMethods: [] };
-        if (forceSimulate) {
-          log('?simulate=1 — skipping real getMethods, using mock data.');
-        } else {
-          try {
-            methodsResponse = await moneyHash.getMethods(getMethodsOptions);
-          } catch (e) {
-            log('getMethods error: ' + JSON.stringify(e), 'err');
-            setStatus('Failed to load payment methods', 'err');
-            return;
-          }
+        try {
+          methodsResponse = await moneyHash.getMethods(getMethodsOptions);
+        } catch (e) {
+          log('getMethods error: ' + JSON.stringify(e), 'err');
+          setStatus('Failed to load payment methods', 'err');
+          return;
         }
 
         const { paymentMethods: pm = [], expressMethods = [] } =
@@ -529,10 +494,22 @@
 
         if (!samsungPay) {
           log(
-            'Samsung Pay not offered by the account — falling back to ' +
-              'simulated nativePayData.',
+            'Samsung Pay not offered by the account — no nativePayData ' +
+              'returned by getMethods.',
+            'err',
           );
-          samsungPay = makeSimulatedSamsungPayMethod();
+          setStatus('Samsung Pay not available', 'err');
+          return;
+        }
+
+        if (!samsungPay.nativePayData) {
+          log(
+            'Samsung Pay method found but has no nativePayData — cannot ' +
+              'initialize the SDK.',
+            'err',
+          );
+          setStatus('Missing Samsung Pay native data', 'err');
+          return;
         }
 
         samsungPayMethodId = samsungPay.id;
