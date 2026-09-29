@@ -27,6 +27,7 @@
 
         if (env === 'local') {
           window.MONEYHASH_IFRAME_URL = 'http://localhost:8080';
+          window.API_URL = 'http://localhost:8000';
           window.MONEYHASH_VAULT_INPUT_IFRAME_URL = 'http://localhost:5173';
           window.MONEYHASH_VAULT_API_URL = 'http://localhost:8001';
         }
@@ -344,8 +345,9 @@
                 // Control what gets sent as the receipt:
                 //   ?receipt=full – the full payment credential (stringified)
                 //   (default)     – just the 3DS data
-                const receiptMode =
-                  new URLSearchParams(location.search).get('receipt');
+                const receiptMode = new URLSearchParams(location.search).get(
+                  'receipt',
+                );
                 const nativeReceiptData = {
                   receipt:
                     receiptMode === 'full'
